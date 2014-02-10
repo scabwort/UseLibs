@@ -20,7 +20,7 @@ func cutImageChan(x, y, cellWidth, cellHeight int, src image.Image, folder strin
 func cutImage(x, y, cellWidth, cellHeight int, src image.Image, folder string, quality int) {
 
 	cellPos := image.Pt(x*cellWidth, y*cellHeight)
-	cellRect := image.Rect(0, 0, 255, 255)
+	cellRect := image.Rect(0, 0, cellWidth, cellHeight)
 	if (x+1)*cellWidth > src.Bounds().Max.X {
 		cellRect.Max.X = src.Bounds().Max.X - x*cellWidth
 	}
@@ -48,8 +48,8 @@ func cutImage(x, y, cellWidth, cellHeight int, src image.Image, folder string, q
 func main() {
 	from := flag.String("from", "bg.jpg", "from info")
 	out := flag.String("out", "out", "out info")
-	cw := flag.Int("cw", 255, "cw info")
-	ch := flag.Int("ch", 255, "ch info")
+	cw := flag.Int("cw", 256, "cw info")
+	ch := flag.Int("ch", 256, "ch info")
 	ql := flag.Int("q", 90, "quality")
 	flag.Parse()
 	fmt.Printf("cell size:(%d,%d), quality:%d, from:%s, out:%s\n", *cw, *ch, *ql, *from, *out)
