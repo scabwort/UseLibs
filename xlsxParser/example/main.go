@@ -22,7 +22,8 @@ type nodeItem struct {
 	Code       string   `xml:"code,attr"`
 	Replace    string   `xml:"replace,attr"`
 	Gap        string   `xml:"gap,attr"`
-	CellIdx    int
+	CellIdxs   []int
+	Names      []string
 	Marked     bool
 	ReplaceArr []string
 	ReplaceIdx int
@@ -262,6 +263,19 @@ func getAsReader(str string) string {
 	}
 	return ""
 }
+func checkInputType(str string) bool {
+	switch str {
+	case "byte":
+		return true
+	case "short":
+		return true
+	case "int":
+		return true
+	case "string":
+		return true
+	}
+	return false
+}
 
 func createAs(tbl *TblNode) {
 	content, err := getContent("template.as")
@@ -314,6 +328,15 @@ func createAs(tbl *TblNode) {
 	}
 }
 
+func arrayIndex(sName []string, pName string) int {
+	for idx, _ := range sName {
+		if sName[idx] == pName {
+			return idx
+		}
+	}
+	return -1
+}
+
 func main() {
 	fromPath := flag.String("from", "config.xml", "from info")
 	flag.Parse()
@@ -336,6 +359,7 @@ func main() {
 			fmt.Printf("%s is not exist!\n", tbl.Xlsx)
 			continue
 		}
+		//errorType := 0
 
 		xlsFile, err := getXlsx(tbl.Xlsx)
 		if err != nil {
@@ -352,16 +376,33 @@ func main() {
 		fmt.Printf("maxRow:%d, maxCol:%d, page:%s\n", page.MaxRow, page.MaxCol, tbl.Page)
 
 		head := page.Rows[0]
+		count := len(tbl.Items)
+		for i := 0; i < count; i++ {
+			tbl.Items[i].Names = strings.Split(tbl.Items[i].Name, ";")
+			nameLen := int(len(tbl.Items[i].Names))
+			tbl.Items[i].CellIdxs = []int{}
+			for j := 0; j < nameLen; j++ {
+				tbl.Items[i].CellIdxs = append(tbl.Items[i].CellIdxs, 0)
+			}
+			tbl.Items[i].Type = strings.ToLower(tbl.Items[i].Type)
+			if !checkInputType(tbl.Items[i].Type) {
+				fmt.Printf("type is error! in cell %s\n", tbl.Items[i].Name)
+				return
+			}
+		}
 		for idx, headVal := range head.Cells {
-			count := len(tbl.Items)
 			for i := 0; i < count; i++ {
 				//fmt.Printf("get it -> idx:%d,value:%s\n", i, tbl.Items[i].Name)
-				if headVal.Value == tbl.Items[i].Name {
-					tbl.Items[i].CellIdx = idx
+				aidx := arrayIndex(tbl.Items[i].Names, headVal.Value)
+				if aidx >= 0 {
+					tbl.Items[i].CellIdxs[aidx] = idx
 					tbl.Items[i].Marked = true
-
-					//fmt.Printf("head(%d):%s, code:%s\n", tblItem.CellIdx, headVal, tblItem.Code)
 				}
+				//if headVal.Value == tbl.Items[i].Name {
+				//	tbl.Items[i].CellIdx = idx
+				//	tbl.Items[i].Marked = true
+				//	//fmt.Printf("head(%d):%s, code:%s\n", tblItem.CellIdx, headVal, tblItem.Code)
+				//}
 			}
 		}
 		for idx, tblItem := range tbl.Items {
@@ -377,11 +418,19 @@ func main() {
 		}
 		buf := new(bytes.Buffer)
 		tbl.ItemNum = 0
+		fmt.Println(page.MaxRow)
 		for i := 1; i < page.MaxRow; i++ {
 			line := page.Rows[i]
-			if line.Cells[0].Value != "" {
+			if _, ok := line.Cells[0]; ok && line.Cells[0].Value != "" {
 				for _, tblItem := range tbl.Items {
-					val := line.Cells[tblItem.CellIdx].Value
+					val := ""
+					for _, cidx := range tblItem.CellIdxs {
+						cellNode := line.Cells[cidx]
+						if cellNode != nil {
+							val += cellNode.Value
+						}
+					}
+					//val := line.Cells[tblItem.CellIdx].Value
 					err := writeItem(tblItem, buf, val)
 					if err != nil {
 						fmt.Println("binary.Write failed:", err)

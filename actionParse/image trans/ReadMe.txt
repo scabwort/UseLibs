@@ -1,0 +1,1 @@
+image_trans.exe -quality=90 -in=aa.png out=pp

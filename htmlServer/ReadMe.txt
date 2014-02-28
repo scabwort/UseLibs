@@ -1,0 +1,1 @@
+htmlServer.exe -dir=指定目录(默认当前目录) -port=绑定端口(默认80端口)
