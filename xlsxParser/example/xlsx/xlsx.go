@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"reflect"
 	"strconv"
 	"strings"
 )
@@ -92,7 +93,7 @@ func readWorkbook(d *xml.Decoder, s *File) []*Sheet {
 func readStrings(d *xml.Decoder, s *File) {
 	var (
 		err   error
-		data  []byte
+		data  string
 		token xml.Token
 	)
 	for {
@@ -117,18 +118,19 @@ func readStrings(d *xml.Decoder, s *File) {
 						s.sharedStrings = make([]string, 0, count)
 					}
 				}
+			case "si":
+				data = ""
 			default:
 				// log.Println(x.Name.Local)
 			}
 		case xml.CharData:
-			data = x.Copy()
+			data += string(x.Copy())
 		case xml.EndElement:
 			switch x.Name.Local {
-			case "t":
-				s.sharedStrings = append(s.sharedStrings, string(data))
+			case "si":
+				s.sharedStrings = append(s.sharedStrings, data)
 			}
 		}
-
 	}
 }
 
@@ -227,12 +229,10 @@ func readWorksheetXML(dec *xml.Decoder, s *File) ([]*Row, error) {
 						if err != nil {
 							return nil, err
 						}
-						//rownum--
 					}
 				}
 				currentRow.Num = rownum
 				rows = append(rows, currentRow)
-				//rows[rownum-1] = currentRow
 			case "c":
 				currentCell = &cell{}
 				var cellnumber rune
@@ -243,6 +243,8 @@ func readWorksheetXML(dec *xml.Decoder, s *File) ([]*Row, error) {
 							if v >= 'A' && v <= 'Z' {
 								//cellnumber = cellnumber*26 + v - 'A'
 								cellnumber = cellnumber*26 + v - 'A' + 1
+							} else {
+								break
 							}
 						}
 					case "t":
@@ -294,11 +296,6 @@ func (ws *Sheet) readWorksheetZIP() error {
 			if len(rows) > 0 {
 				ws.MaxCol = len(rows[0].Cells)
 			}
-			//for _, row := range rows {
-			//	if len(row.Cells) > ws.MaxCol {
-			//		ws.MaxCol = len(row.Cells)
-			//	}
-			//}
 			if err != nil {
 				return err
 			}
@@ -351,5 +348,129 @@ func (s *File) GetSheetByName(name string) (*Sheet, error) {
 		}
 	}
 	return nil, errors.New("Index out of range")
+}
 
+type CellHead struct {
+	Index    int
+	Pos      int
+	Name     string
+	CellType reflect.Type
+}
+
+/**
+ * Unmarshal xlsx from path
+ */
+func Unmarshal(path string, v interface{}) error {
+	file, err := OpenFile(path)
+
+	if err != nil {
+		return err
+	}
+
+	return UnmarshalXlsx(file, v)
+}
+
+/**
+ * Unmarshal for xlsx
+ */
+func UnmarshalXlsx(data *File, v interface{}) error {
+	rv := reflect.ValueOf(v)
+	if rv.Kind() != reflect.Ptr || rv.IsNil() {
+		return errors.New("noly support for ptr")
+	}
+	rv = rv.Elem()
+	numFiles := rv.NumField()
+	typ := rv.Type()
+	for i := 0; i < numFiles; i++ {
+		ftyp := typ.Field(i)
+		fv := rv.Field(i)
+		//sheet name and sheet Index
+		sheetKey := ftyp.Tag.Get("sheet")
+		sheetIndex := ftyp.Tag.Get("index")
+		sheetID := -1
+		//ignore field without sheet tag
+		if sheetKey == "" {
+			continue
+		}
+		//TODO only support map
+		if sheetIndex == "" {
+			return errors.New("sheet[" + sheetKey + "] has not sheet key for map")
+		}
+		//parse sheet
+		sheet, err := data.GetSheetByName(sheetKey)
+		if err != nil {
+			return errors.New("xlsx has not sheet[" + sheetKey + "]")
+		}
+		//get head, second row is title, TODO Sheet no data handle
+		if sheet.MaxRow < 2 {
+			return errors.New("sheet[" + sheetKey + "] record is less then 2")
+		}
+		headRow := sheet.Rows[1]
+		headRowLen := len(headRow.Cells)
+
+		//init map or slice
+		if ftyp.Type.Kind() == reflect.Map {
+			fv.Set(reflect.MakeMap(ftyp.Type))
+		} else {
+			return errors.New("just support sheet to map")
+		}
+		//get row sturct
+		rowTyp := ftyp.Type.Elem().Elem()
+		lineTypFieldNum := rowTyp.NumField()
+		heads := []CellHead{}
+		for k := 0; k < lineTypFieldNum; k++ {
+			lf := rowTyp.Field(k)
+			ltag := lf.Tag.Get("xls")
+			if ltag != "" {
+				pos := -1
+				for j := 0; j < headRowLen; j++ {
+					if ltag == headRow.Cells[j].Value {
+						pos = j
+						break
+					}
+				}
+				//field no in xls
+				if pos == -1 {
+					return errors.New("head [" + ltag + "]no in xls")
+				}
+				heads = append(heads, CellHead{Index: k, Pos: pos, Name: ltag, CellType: lf.Type})
+
+				if lf.Name == sheetIndex {
+					sheetID = k
+				}
+			}
+		}
+		if sheetID == -1 {
+			return errors.New("sheetID[" + sheetIndex + "] is no in xls")
+		}
+		//get xlsx data
+		headLen := len(heads)
+		for rowNo := 2; rowNo < sheet.MaxRow; rowNo++ {
+			row := sheet.Rows[rowNo]
+			rowObj := reflect.New(rowTyp)
+			for ci := 0; ci < headLen; ci++ {
+				cell := heads[ci]
+				//TODO 数据第一行不能有空cell，临时解决不知会否引起其他bug
+				if row.Cells[cell.Pos] == nil {
+					rowObj.Elem().Field(cell.Index).SetString("")
+				} else {
+					cellV := row.Cells[cell.Pos].Value
+					switch cell.CellType.Kind() {
+					case reflect.Int, reflect.Int16, reflect.Int32, reflect.Int64:
+						cellVInt, _ := strconv.Atoi(cellV)
+						rowObj.Elem().Field(cell.Index).SetInt(int64(cellVInt))
+					case reflect.String:
+						rowObj.Elem().Field(cell.Index).SetString(cellV)
+					case reflect.Float64:
+						f, _ := strconv.ParseFloat(cellV, 64)
+						rowObj.Elem().Field(cell.Index).SetFloat(f)
+					default:
+						return errors.New("no defined type [" + cell.CellType.Name() + "]")
+					}
+				}
+			}
+			fv.SetMapIndex(rowObj.Elem().Field(sheetID), rowObj)
+		}
+	}
+	return nil
 }
